@@ -1,0 +1,138 @@
+name: Semantic Release
+description: Bump an npm package version, generate a changelog, tag, and optionally publish a GitHub release.
+
+inputs:
+  bump_type:
+    description: 'Version bump from the last final release: patch | minor | major'
+    required: true
+  is_prerelease:
+    description: 'Whether this is a prerelease (true | false)'
+    required: false
+    default: 'false'
+  prerelease_suffix:
+    description: 'Prerelease suffix (e.g. rc, beta, alpha). Used when is_prerelease=true.'
+    required: false
+    default: 'rc'
+  changelog_file:
+    description: 'Path to the changelog file (relative to working_directory).'
+    required: false
+    default: 'CHANGELOG.md'
+  changelog_preset:
+    description: 'conventional-changelog preset (angular, conventionalcommits, ...).'
+    required: false
+    default: 'angular'
+  working_directory:
+    description: 'Directory containing package.json'
+    required: false
+    default: '.'
+  push:
+    description: 'Push the release commit and tag (true | false).'
+    required: false
+    default: 'true'
+  create_github_release:
+    description: 'Create a GitHub release for the new tag (true | false).'
+    required: false
+    default: 'true'
+  github_token:
+    description: 'Token used to push and create the GitHub release.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  new_version:
+    description: 'New version (no v prefix), e.g. 1.0.0-rc.0'
+    value: ${{ steps.compute.outputs.new_version }}
+  new_tag:
+    description: 'New tag (with v prefix), e.g. v1.0.0-rc.0'
+    value: ${{ steps.compute.outputs.new_tag }}
+  previous_tag:
+    description: 'The most recent tag prior to this release, if any.'
+    value: ${{ steps.compute.outputs.previous_tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        BUMP_TYPE: ${{ inputs.bump_type }}
+        IS_PRERELEASE: ${{ inputs.is_prerelease }}
+        PRERELEASE_SUFFIX: ${{ inputs.prerelease_suffix }}
+      run: |
+        case "$BUMP_TYPE" in
+          patch|minor|major) ;;
+          *) echo "::error::bump_type must be one of: patch, minor, major (got '$BUMP_TYPE')"; exit 1 ;;
+        esac
+        if [ "$IS_PRERELEASE" = "true" ] && [ -z "$PRERELEASE_SUFFIX" ]; then
+          echo "::error::prerelease_suffix is required when is_prerelease=true"
+          exit 1
+        fi
+
+    - name: Compute new version
+      id: compute
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        BUMP_TYPE: ${{ inputs.bump_type }}
+        IS_PRERELEASE: ${{ inputs.is_prerelease }}
+        PRERELEASE_SUFFIX: ${{ inputs.prerelease_suffix }}
+      run: node "$GITHUB_ACTION_PATH/compute-version.js"
+
+    - name: Update package.json version
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        NEW_VERSION: ${{ steps.compute.outputs.new_version }}
+      run: npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
+
+    - name: Generate changelog
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        CHANGELOG_FILE: ${{ inputs.changelog_file }}
+        CHANGELOG_PRESET: ${{ inputs.changelog_preset }}
+      run: |
+        [ -f "$CHANGELOG_FILE" ] || touch "$CHANGELOG_FILE"
+        npx -y conventional-changelog-cli@^4 \
+          -p "$CHANGELOG_PRESET" \
+          -i "$CHANGELOG_FILE" \
+          -s \
+          -r 1
+
+    - name: Configure git as github-actions bot
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: Commit and tag
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        NEW_TAG: ${{ steps.compute.outputs.new_tag }}
+        CHANGELOG_FILE: ${{ inputs.changelog_file }}
+      run: |
+        git add package.json "$CHANGELOG_FILE"
+        [ -f package-lock.json ] && git add package-lock.json || true
+        [ -f npm-shrinkwrap.json ] && git add npm-shrinkwrap.json || true
+        git commit -m "chore(release): $NEW_TAG [skip ci]"
+        git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
+
+    - name: Push commit and tag
+      if: inputs.push == 'true'
+      shell: bash
+      run: git push --follow-tags
+
+    - name: Create GitHub release
+      if: inputs.create_github_release == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        NEW_TAG: ${{ steps.compute.outputs.new_tag }}
+        PREVIOUS_TAG: ${{ steps.compute.outputs.previous_tag }}
+        IS_PRERELEASE: ${{ inputs.is_prerelease }}
+      run: |
+        ARGS=(release create "$NEW_TAG" --title "$NEW_TAG" --generate-notes)
+        [ "$IS_PRERELEASE" = "true" ] && ARGS+=(--prerelease)
+        [ -n "$PREVIOUS_TAG" ] && ARGS+=(--notes-start-tag "$PREVIOUS_TAG")
+        gh "${ARGS[@]}"

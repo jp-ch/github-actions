@@ -1,0 +1,97 @@
+name: Reusable Semantic Release
+
+on:
+  workflow_call:
+    inputs:
+      bump_type:
+        description: 'patch | minor | major'
+        type: string
+        required: true
+      is_prerelease:
+        type: boolean
+        required: false
+        default: false
+      prerelease_suffix:
+        type: string
+        required: false
+        default: 'rc'
+      node_version:
+        type: string
+        required: false
+        default: '20'
+      changelog_file:
+        type: string
+        required: false
+        default: 'CHANGELOG.md'
+      changelog_preset:
+        type: string
+        required: false
+        default: 'angular'
+      working_directory:
+        type: string
+        required: false
+        default: '.'
+      push:
+        type: boolean
+        required: false
+        default: true
+      create_github_release:
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      new_version:
+        description: 'New version (no v prefix)'
+        value: ${{ jobs.release.outputs.new_version }}
+      new_tag:
+        description: 'New tag (with v prefix)'
+        value: ${{ jobs.release.outputs.new_tag }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.release.outputs.new_version }}
+      new_tag: ${{ steps.release.outputs.new_tag }}
+    steps:
+      - name: Resolve action source from workflow_ref
+        id: meta
+        shell: bash
+        run: |
+          # GITHUB_WORKFLOW_REF e.g. owner/repo/.github/workflows/release.yml@refs/heads/main
+          REPO="${GITHUB_WORKFLOW_REF%%/.github/*}"
+          REF="${GITHUB_WORKFLOW_REF##*@}"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout reusable-action source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.meta.outputs.repo }}
+          ref: ${{ steps.meta.outputs.ref }}
+          path: .semantic-release-action
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Run semantic-release action
+        id: release
+        uses: ./.semantic-release-action/actions/semantic-release
+        with:
+          bump_type: ${{ inputs.bump_type }}
+          is_prerelease: ${{ inputs.is_prerelease }}
+          prerelease_suffix: ${{ inputs.prerelease_suffix }}
+          changelog_file: ${{ inputs.changelog_file }}
+          changelog_preset: ${{ inputs.changelog_preset }}
+          working_directory: ${{ inputs.working_directory }}
+          push: ${{ inputs.push }}
+          create_github_release: ${{ inputs.create_github_release }}

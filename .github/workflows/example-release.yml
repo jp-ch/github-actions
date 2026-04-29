@@ -1,0 +1,31 @@
+name: Release (example)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      is_prerelease:
+        description: 'Prerelease?'
+        type: boolean
+        default: false
+      prerelease_suffix:
+        description: 'Prerelease suffix (used when prerelease=true)'
+        type: string
+        default: rc
+
+jobs:
+  release:
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+    with:
+      bump_type: ${{ inputs.bump_type }}
+      is_prerelease: ${{ inputs.is_prerelease }}
+      prerelease_suffix: ${{ inputs.prerelease_suffix }}
